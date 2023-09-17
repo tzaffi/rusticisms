@@ -1,3 +1,7 @@
+#![feature(test)]
+extern crate test;
+use test::Bencher;
+
 use luhn::*;
 
 fn process_valid_case(number: &str, is_luhn_expected: bool) {
@@ -119,11 +123,13 @@ fn using_ascii_value_for_nondoubled_nondigit_isnt_allowed() {
     process_valid_case("055b 444 285", false);
 }
 
-#[test]
-#[ignore]
+#[bench]
 /// valid number with an odd number of spaces
-fn valid_number_with_an_odd_number_of_spaces() {
-    process_valid_case("234 567 891 234", true);
+fn valid_number_with_an_odd_number_of_spaces(b: &mut Bencher) {
+    // fn valid_number_with_an_odd_number_of_spaces() {
+    // process_valid_case("234 567 891 234", true);
+
+    b.iter(|| is_valid("234 567 891 234"))
 }
 
 #[test]

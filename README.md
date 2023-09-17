@@ -3,7 +3,7 @@
 ## Useful Commands
 ```sh
 ❯ cargo test
-❯ cargo test -- --ignore
+❯ cargo test -- --ignored
 
 ❯ exercism submit src/lib.rs Cargo.toml
 
