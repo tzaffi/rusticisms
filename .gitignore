@@ -1,2 +1,4 @@
 .tool-versions
 */.exercism
+.fingerprint
+**/debug/*
