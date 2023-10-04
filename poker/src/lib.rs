@@ -1,9 +1,26 @@
+use itertools::sorted;
+use std::cmp::Ordering;
+
 /// Given a list of poker hands, return a list of those hands which win.
 ///
 /// Note the type signature: this function should return _the same_ reference to
 /// the winning hand(s) as were passed in, not reconstructed strings which happen to be equal.
 pub fn winning_hands<'a>(hands: &[&'a str]) -> Vec<&'a str> {
-    todo!("Out of {hands:?}, which hand wins?")
+    let hands_st = hands
+        .iter()
+        .map(|s| Hand::from_str(s).unwrap())
+        .collect::<Vec<_>>();
+
+    let max_hand = hands_st.iter().max().unwrap();
+
+    let indices = hands_st
+        .iter()
+        .enumerate()
+        .filter(|(_, hand)| hand == &max_hand)
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+
+    indices.iter().map(|&i| hands[i]).collect()
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
@@ -127,7 +144,133 @@ impl Hand {
         if cards.len() != 5 {
             return None;
         }
-        // let cards = (cards[0], cards[1], cards[2], cards[3], cards[4]);
-        Self::new(cards[0], cards[1], cards[2], cards[3], cards[4]).ok()
+        let scards: Vec<Card> = sorted(cards).collect();
+
+        Self::new(scards[0], scards[1], scards[2], scards[3], scards[4]).ok()
+    }
+
+    pub fn is_flush(&self) -> bool {
+        let cards = self.0;
+        [(cards).0, (cards).1, (cards).2, (cards).3, (cards).4]
+            .windows(2)
+            .all(|w| w[0].suit == w[1].suit)
+    }
+
+    pub fn is_straight(&self) -> bool {
+        let cards = self.0;
+        [(cards).0, (cards).1, (cards).2, (cards).3, (cards).4]
+            .windows(2)
+            .all(|w| w[0].rank as u8 + 1 == w[1].rank as u8)
+    }
+
+    pub fn kind_groups(&self) -> (KindGroups, Vec<Rank>) {
+        let cards = [self.0 .0, self.0 .1, self.0 .2, self.0 .3, self.0 .4];
+        let mut groups = vec![];
+        let mut remainder = vec![];
+        let mut cur_rank = cards[0].rank;
+        let mut cur_count = 1;
+        for i in 0..4 {
+            if cards[i].rank == cards[i + 1].rank {
+                cur_count += 1;
+            } else {
+                if cur_count > 1 {
+                    groups.push((cur_rank, cur_count));
+                } else {
+                    remainder.push(cur_rank);
+                }
+                cur_rank = cards[i + 1].rank;
+                cur_count = 1;
+            }
+        }
+        if cur_count > 1 {
+            groups.push((cur_rank, cur_count));
+        } else {
+            remainder.push(cur_rank);
+        }
+        groups.sort_by(|a, b| b.1.cmp(&a.1));
+        remainder.sort();
+        remainder.reverse();
+        (KindGroups(groups), remainder)
+    }
+
+    pub fn categorize(&self) -> (Category, KindGroups, Vec<Rank>) {
+        let (groups, remainders) = self.kind_groups();
+        match groups.0.len() {
+            0 => {
+                if self.is_flush() {
+                    if self.is_straight() {
+                        return (Category::StraightFlush, groups, remainders);
+                    }
+                    return (Category::Flush, groups, remainders);
+                }
+                (Category::HighCard, groups, remainders)
+            }
+            1 => match groups.0[0].1 {
+                2 => (Category::OnePair, groups, remainders),
+                3 => (Category::ThreeOfAKind, groups, remainders),
+                4 => (Category::FourOfAKind, groups, remainders),
+                _ => unreachable!(),
+            },
+            2 => match groups.0[0].1 {
+                2 => (Category::TwoPairs, groups, remainders),
+                3 => (Category::FullHouse, groups, remainders),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl PartialOrd for Hand {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.cmp(other).into()
+    }
+}
+
+impl Ord for Hand {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let (cat1, groups1, remainders1) = self.categorize();
+        let (cat2, groups2, remainders2) = other.categorize();
+        if cat1 != cat2 {
+            return cat1.cmp(&cat2);
+        }
+        if groups1 != groups2 {
+            return groups1.partial_cmp(&groups2).unwrap();
+        }
+        remainders1.partial_cmp(&remainders2).unwrap()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
+pub enum Category {
+    HighCard = 0,
+    OnePair,
+    TwoPairs,
+    ThreeOfAKind,
+    Straight,
+    Flush,
+    FullHouse,
+    FourOfAKind,
+    StraightFlush,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct KindGroups(pub Vec<(Rank, usize)>);
+
+impl KindGroups {
+    pub fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let cards = &self.0;
+        if cards.len() != other.0.len() {
+            return None;
+        }
+        for i in 0..cards.len() {
+            if cards[i].1 != other.0[i].1 {
+                return None;
+            }
+            if cards[i].0 != other.0[i].0 {
+                return cards[i].0.partial_cmp(&other.0[i].0);
+            }
+        }
+        Some(Ordering::Equal)
     }
 }
