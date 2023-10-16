@@ -11,12 +11,15 @@ pub fn winning_hands<'a>(hands: &[&'a str]) -> Vec<&'a str> {
         .map(|s| Hand::from_str(s).unwrap())
         .collect::<Vec<_>>();
 
-    let max_hand = hands_st.iter().max().unwrap();
+    let max_hand = match hands_st.iter().max() {
+        Some(h) => *h,
+        None => return vec![],
+    };
 
     let indices = hands_st
         .iter()
         .enumerate()
-        .filter(|(_, hand)| hand == &max_hand)
+        .filter(|(_, hand)| hand.cmp(&&max_hand) == Ordering::Equal)
         .map(|(i, _)| i)
         .collect::<Vec<_>>();
 
@@ -111,16 +114,13 @@ impl Card {
         }
 
         // WLOG s.len() == 3
-        if bytes[0] != '1' as u8 {
-            return None;
+        if s.starts_with("10") {
+            return Some(Card {
+                rank: Rank::Ten,
+                suit,
+            });
         }
-        if bytes[1] != '0' as u8 {
-            return None;
-        }
-        Some(Card {
-            rank: Rank::Ten,
-            suit,
-        })
+        None
     }
 }
 
@@ -156,13 +156,32 @@ impl Hand {
             .all(|w| w[0].suit == w[1].suit)
     }
 
-    pub fn is_straight(&self) -> bool {
-        let cards = self.0;
-        [(cards).0, (cards).1, (cards).2, (cards).3, (cards).4]
-            .windows(2)
-            .all(|w| w[0].rank as u8 + 1 == w[1].rank as u8)
+    // Assumes that the cards are sorted descending by rank
+    // returns (is_straight, is_low_ace)
+    pub fn straight_type(ranks: &Vec<Rank>) -> (bool, bool) {
+        fn sub_straight(ranks: &[Rank]) -> bool {
+            ranks.windows(2).all(|w| w[0] as u8 - 1 == w[1] as u8)
+        }
+
+        if ranks[0] == Rank::Ace {
+            if sub_straight(ranks) {
+                return (true, false);
+            }
+            if ranks[1] == Rank::Five && sub_straight(&ranks[1..]) {
+                return (true, true);
+            }
+        }
+        (sub_straight(ranks), false)
     }
 
+    /// Calculates and returns the kind groups and remainder cards for a hand.
+    ///
+    /// The kind groups are represented as a `KindGroups` structure containing
+    /// vectors of tuples `(count, rank)`, where `count` is the number of occurrences
+    /// of cards with the same rank in the hand, and `rank` is the rank of those cards.
+    ///
+    /// The remainder is a vector containing the ranks of cards not included in any groups,
+    /// sorted in descending order.
     pub fn kind_groups(&self) -> (KindGroups, Vec<Rank>) {
         let cards = [self.0 .0, self.0 .1, self.0 .2, self.0 .3, self.0 .4];
         let mut groups = vec![];
@@ -174,7 +193,7 @@ impl Hand {
                 cur_count += 1;
             } else {
                 if cur_count > 1 {
-                    groups.push((cur_rank, cur_count));
+                    groups.push((cur_count, cur_rank));
                 } else {
                     remainder.push(cur_rank);
                 }
@@ -183,37 +202,43 @@ impl Hand {
             }
         }
         if cur_count > 1 {
-            groups.push((cur_rank, cur_count));
+            groups.push((cur_count, cur_rank));
         } else {
             remainder.push(cur_rank);
         }
-        groups.sort_by(|a, b| b.1.cmp(&a.1));
+        groups.sort();
+        groups.reverse();
         remainder.sort();
         remainder.reverse();
         (KindGroups(groups), remainder)
     }
 
-    pub fn categorize(&self) -> (Category, KindGroups, Vec<Rank>) {
+    pub fn categorize(&self) -> (Category, KindGroups, Vec<Rank>, bool) {
+        // TODO: this should cache the result
         let (groups, remainders) = self.kind_groups();
         match groups.0.len() {
             0 => {
+                let (is_straight, is_low_ace) = Self::straight_type(&remainders);
                 if self.is_flush() {
-                    if self.is_straight() {
-                        return (Category::StraightFlush, groups, remainders);
+                    if is_straight {
+                        return (Category::StraightFlush, groups, remainders, is_low_ace);
                     }
-                    return (Category::Flush, groups, remainders);
+                    return (Category::Flush, groups, remainders, is_low_ace);
                 }
-                (Category::HighCard, groups, remainders)
+                if is_straight {
+                    return (Category::Straight, groups, remainders, is_low_ace);
+                }
+                (Category::HighCard, groups, remainders, false)
             }
-            1 => match groups.0[0].1 {
-                2 => (Category::OnePair, groups, remainders),
-                3 => (Category::ThreeOfAKind, groups, remainders),
-                4 => (Category::FourOfAKind, groups, remainders),
+            1 => match groups.0[0].0 {
+                2 => (Category::OnePair, groups, remainders, false),
+                3 => (Category::ThreeOfAKind, groups, remainders, false),
+                4 => (Category::FourOfAKind, groups, remainders, false),
                 _ => unreachable!(),
             },
-            2 => match groups.0[0].1 {
-                2 => (Category::TwoPairs, groups, remainders),
-                3 => (Category::FullHouse, groups, remainders),
+            2 => match groups.0[0].0 {
+                2 => (Category::TwoPairs, groups, remainders, false),
+                3 => (Category::FullHouse, groups, remainders, false),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -229,13 +254,22 @@ impl PartialOrd for Hand {
 
 impl Ord for Hand {
     fn cmp(&self, other: &Self) -> Ordering {
-        let (cat1, groups1, remainders1) = self.categorize();
-        let (cat2, groups2, remainders2) = other.categorize();
+        let (cat1, groups1, remainders1, low_ace1) = self.categorize();
+        let (cat2, groups2, remainders2, low_ace2) = other.categorize();
         if cat1 != cat2 {
             return cat1.cmp(&cat2);
         }
         if groups1 != groups2 {
             return groups1.partial_cmp(&groups2).unwrap();
+        }
+        if cat1 == Category::StraightFlush || cat1 == Category::Straight {
+            if low_ace1 != low_ace2 {
+                return if low_ace1 {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
+            }
         }
         remainders1.partial_cmp(&remainders2).unwrap()
     }
@@ -255,7 +289,7 @@ pub enum Category {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct KindGroups(pub Vec<(Rank, usize)>);
+pub struct KindGroups(pub Vec<(usize, Rank)>);
 
 impl KindGroups {
     pub fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -264,11 +298,11 @@ impl KindGroups {
             return None;
         }
         for i in 0..cards.len() {
-            if cards[i].1 != other.0[i].1 {
+            if cards[i].0 != other.0[i].0 {
                 return None;
             }
-            if cards[i].0 != other.0[i].0 {
-                return cards[i].0.partial_cmp(&other.0[i].0);
+            if cards[i].1 != other.0[i].1 {
+                return cards[i].1.partial_cmp(&other.0[i].1);
             }
         }
         Some(Ordering::Equal)
