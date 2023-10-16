@@ -2,3 +2,4 @@
 */.exercism
 .fingerprint
 **/debug/*
+**/target
